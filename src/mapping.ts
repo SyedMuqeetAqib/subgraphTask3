@@ -1,68 +1,112 @@
-import { BigInt } from "@graphprotocol/graph-ts"
+import { Address, BigInt } from "@graphprotocol/graph-ts"
 import {
   PhoenixDAO,
   Approval,
   OwnershipTransferred,
   Transfer
 } from "../generated/PhoenixDAO/PhoenixDAO"
-import { ExampleEntity } from "../generated/schema"
+import { TokenDetail, TransactionHistory,  User } from "../generated/schema"
 
 export function handleApproval(event: Approval): void {
-  // Entities can be loaded from the store using a string ID; this ID
-  // needs to be unique across all entities of the same type
-  let entity = ExampleEntity.load(event.transaction.from.toHex())
+  let transaction = new TransactionHistory(event.transaction.hash.toHex());
+  transaction.to = event.params.owner;
+  transaction.from = event.params.spender;
+  transaction.method = "approve";
+  transaction.amount = event.params.value;
+  transaction.save()
 
-  // Entities only exist after they have been saved to the store;
-  // `null` checks allow to create entities on demand
-  if (!entity) {
-    entity = new ExampleEntity(event.transaction.from.toHex())
-
-    // Entity fields can be set using simple assignments
-    entity.count = BigInt.fromI32(0)
+  let id = event.params.spender.toHexString();
+  let user = User.load(id);
+  if(!user){
+    user = new User(id);
+    user.address = event.params.spender;
+    user.currentBalance = BigInt.fromI32(0);
   }
+  user.allowance = event.params.value;
+  user.save()
 
-  // BigInt and BigDecimal math are supported
-  entity.count = entity.count + BigInt.fromI32(1)
-
-  // Entity fields can be set based on event parameters
-  entity.owner = event.params.owner
-  entity.spender = event.params.spender
-
-  // Entities can be written to the store with `.save()`
-  entity.save()
-
-  // Note: If a handler doesn't require existing field values, it is faster
-  // _not_ to load the entity from the store. Instead, create it fresh with
-  // `new Entity(...)`, set the fields that should be updated and save the
-  // entity back to the store. Fields that were not set or unset remain
-  // unchanged, allowing for partial updates to be applied.
-
-  // It is also possible to access smart contracts from mappings. For
-  // example, the contract that has emitted the event can be connected to
-  // with:
-  //
-  // let contract = Contract.bind(event.address)
-  //
-  // The following functions can then be called on this contract to access
-  // state variables and other data:
-  //
-  // - contract.allowance(...)
-  // - contract.approve(...)
-  // - contract.balanceOf(...)
-  // - contract.burn(...)
-  // - contract.decimals(...)
-  // - contract.decreaseAllowance(...)
-  // - contract.increaseAllowance(...)
-  // - contract.isOwner(...)
-  // - contract.mint(...)
-  // - contract.name(...)
-  // - contract.owner(...)
-  // - contract.symbol(...)
-  // - contract.totalSupply(...)
-  // - contract.transfer(...)
-  // - contract.transferFrom(...)
 }
 
-export function handleOwnershipTransferred(event: OwnershipTransferred): void {}
+export function handleOwnershipTransferred(event: OwnershipTransferred): void {
+  let transaction = new TransactionHistory(event.transaction.hash.toHex());
+  transaction.to = event.params.newOwner;
+  transaction.from = event.params.previousOwner;
+  transaction.amount = BigInt.fromI32(0);
+  transaction.method = "ownershipTransfer";
+  transaction.time = event.block.timestamp;
+  transaction.block = event.block.number;
+  transaction.save()
+}
 
-export function handleTransfer(event: Transfer): void {}
+export function handleTransfer(event: Transfer): void {
+  let transaction = new TransactionHistory(event.transaction.hash.toHex());
+  transaction.to = event.params.to;
+  transaction.from = event.params.from;
+  transaction.method = "transferToken";
+  transaction.amount = event.params.value;
+  transaction.time = event.block.timestamp;
+  transaction.block = event.block.number;
+  transaction.save();
+  let tokenDetails = TokenDetail.load(Address.fromString("0x38A2fDc11f526Ddd5a607C1F251C065f40fBF2f7").toHexString());
+if(!tokenDetails){
+  tokenDetails = new TokenDetail(Address.fromString("0x38A2fDc11f526Ddd5a607C1F251C065f40fBF2f7").toHexString())
+  tokenDetails.tokenMaxSupply = BigInt.fromI32(110000000);
+  tokenDetails.holders = [];
+}
+let holders = tokenDetails.holders;
+ let senderUser = User.load((event.params.from).toHexString());
+ if(senderUser){
+    senderUser.currentBalance = senderUser.currentBalance.minus(event.params.value)
+    if(holders.includes(senderUser.address.toHexString())){
+      if(senderUser.currentBalance.minus(event.params.value) === BigInt.fromI64(0)){
+        const index = holders.indexOf(senderUser.address.toHexString());
+              if(index > -1){
+                holders.splice(index,1)
+                tokenDetails.holders = holders;
+              }
+      }
+    }else{
+      if(senderUser.currentBalance.minus(event.params.value) !== BigInt.fromI64(0)){
+     holders.push(event.params.from.toHexString());
+     tokenDetails.holders = holders;
+      }
+    }
+
+    senderUser.save();
+ }
+ else{
+  senderUser = new User(event.params.from.toHexString());
+  senderUser.address = event.params.from;
+  senderUser.currentBalance = senderUser.currentBalance;
+  senderUser.allowance = event.params.value;
+  senderUser.save()
+ }
+
+  let receiverUser = User.load((event.params.to).toHexString());
+  if(receiverUser){
+    receiverUser.currentBalance = receiverUser.currentBalance.plus(event.params.value)
+    if(holders.includes(receiverUser.address.toHexString())){
+      if(receiverUser.currentBalance.minus(event.params.value) == BigInt.fromI64(0)){
+        const index = holders.indexOf(receiverUser.address.toHexString());
+              if(index > -1){
+                holders.splice(index,1)
+                tokenDetails.holders = holders;
+              }
+      }
+    }else{
+      if(receiverUser.currentBalance.minus(event.params.value) != BigInt.fromI64(0)){
+     holders.push(event.params.to.toHexString());
+     tokenDetails.holders = holders;
+      }
+    }
+    receiverUser.save();
+ }
+ else{
+   receiverUser = new User(event.params.to.toHexString());
+   receiverUser.address = event.params.to;
+   receiverUser.currentBalance = receiverUser.currentBalance.plus(event.params.value);
+   receiverUser.allowance = event.params.value;
+   receiverUser.save()
+ }
+ tokenDetails.save()
+}
